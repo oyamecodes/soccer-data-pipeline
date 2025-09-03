@@ -1,7 +1,4 @@
 # Soccer Data Pipeline — Architecture & Implementation Guide
-
-> Concrete architectural diagram + full documentation for a reproducible, testable, cost-aware pipeline on Google Cloud Platform (free-tier-friendly). No Terraform included.
-
 ---
 
 ## Table of contents
@@ -10,7 +7,7 @@
 3. Component responsibilities
 4. Data formats & schema
 5. Ingestion (GitHub Actions -> GCS)
-6. Processing (Cloud Run ETL)
+6. Processing (Dataflow ETL)
 7. Storage (BigQuery schemas & partitioning)
 8. Modeling (BigQuery ML + Vertex AI path)
 9. Evaluation & validation strategy
@@ -33,51 +30,9 @@ Primary goals:
 
 
 ## 2. Architecture diagram (Mermaid)
+![Architecture Diagram](./assets/architecture.png)
 
-```mermaid
-flowchart LR
-  subgraph SOURCE
-    GH[GitHub repo (JSON files)]
-  end
-
-  subgraph INGEST
-    GHAction[GitHub Action]
-    GCS[GCS Bucket (raw/ingest/)]
-  end
-
-  subgraph PROCESS
-    CR[Cloud Run ETL]
-    BQ[BigQuery (staging -> normalized)]
-  end
-
-  subgraph MODEL
-    BQML[BigQuery ML]
-    VA[Vertex AI (optional)]
-    MODEL_REG[Model artifact / metadata]
-  end
-
-  subgraph CI_CD
-    GB[GitHub Actions (CI) / Cloud Build]
-  end
-
-  subgraph MON
-    LOGS[Cloud Logging]
-    ALERTS[Budget Alerts]
-  end
-
-  GH -->|push| GHAction -->|upload JSON| GCS
-  GCS -->|pull / trigger| CR -->|write| BQ
-  BQ -->|train/query| BQML
-  BQML --> MODEL_REG
-  MODEL_REG -->|optional| VA
-  CR --> LOGS
-  BQ --> LOGS
-  GB --> CR
-  GB --> BQML
-  LOGS --> ALERTS
-```
-
-> The mermaid diagram above maps the main flow: GitHub pushes JSON -> GitHub Action uploads to GCS -> Cloud Run ETL normalizes and writes to BigQuery -> BigQuery ML trains model. CI/CD (GitHub Actions) orchestrates tests and retraining, and Cloud Logging / Budget Alerts provide monitoring.
+> The mermaid diagram above maps the main flow: GitHub pushes JSON -> GitHub Action uploads to GCS -> Dataflow ETL normalizes and writes to BigQuery -> BigQuery ML trains model/ vertex AI. CI/CD (GitHub Actions) orchestrates tests and retraining, and Cloud Logging / Budget Alerts provide monitoring.
 
 
 ## 3. Component responsibilities
@@ -87,10 +42,14 @@ flowchart LR
 
 - **GCS (raw)**: Immutable raw JSON objects stored by path `raw/<league>/<season>/<file>.json`. Use a lifecycle policy to purge > 1 year if cost is a concern.
 
-- **Cloud Run ETL**: Containerized Python service triggered manually, by schedule (Cloud Scheduler -> Pub/Sub -> Cloud Run), or by GitHub Actions. It:
-  1. Reads JSON files from GCS.
-  2. Validates & normalizes records (flatten scores, fill missing fields, parse dates).
-  3. Writes to a staging BigQuery table (append) and then to the normalized production table (partitioned).
+- **Dataflow**: Scalable pipeline triggered automatically via Cloud Function (on GCS upload), or scheduled with Cloud Scheduler → Pub/Sub → Dataflow Flex Template It:
+  - Reads raw JSON files from Cloud Storage.
+  - Validates & normalizes records (flattens nested scores, handles missing fields, enforces schema, parses dates).
+  - Writes cleaned data into a staging BigQuery table (append-only).
+  - Transforms & loads from staging into a normalized BigQuery production table (partitioned by date/season)
+
+- **Triggers**:
+  - GCS upload (via GitHub Actions) triggers a Cloud Function → launches a Dataflow job (template or flex template).
 
 - **BigQuery**:
   - `dataset: soccer_data`
@@ -151,19 +110,20 @@ Clustering: `CLUSTER BY league, team_home, team_away` to reduce scan costs when 
 
 
 ## 6. Processing — Cloud Run ETL
-**Why Cloud Run?** Serverless (free-tier requests), containerized, easy to test locally.
+**Why Dataflow?** Fully managed, scalable batch/stream processing with Apache Beam. Handles large JSON inputs, schema enforcement, and parallel transformations. Free tier covers a small number of worker hours/month, but you can limit jobs and set budget alerts.
 
 **ETL flow per run**:
-1. List files in GCS path (optionally filter by prefix/commit).
-2. For each file:
-   - Load JSON into Python dicts.
-   - Validate structure against `schema.json` (use `jsonschema`).
+1. Triggered by Cloud Function on GCS upload or scheduled via Cloud Scheduler → Pub/Sub → Dataflow template..
+2. For each JSON file:
+   - Read into Beam PCollection of Python dicts.
+   - Validate structure against schema.json (with jsonschema or custom DoFn).
    - Normalize into row-level match records.
-   - Standardize team names (map aliases to canonical names via a lookup table in repo or BigQuery table `team_aliases`).
-   - Write to `matches_raw` (optional) and append to `matches_normalized`.
-3. Commit a summary report (counts, errors) to Cloud Logging and return non-zero exit on fatal errors.
+   - Standardize team names (map aliases to canonical names using a side input lookup from BigQuery team_aliases).
+   - Write intermediate output into matches_staging (BigQuery, append-only).
+   - Aggregate & transform staging data into matches_normalized (partitioned by season/date)
+3. Emit processing stats (counts, errors, bad rows) to Cloud Logging and raise job failure on fatal errors.
 
-**Idempotency**: Use `source_commit` and `file_path` columns — skip if record for that file+sha already exists.
+**Idempotency**: Include source_commit and file_path as job metadata. Deduplicate in BigQuery staging or enforce uniqueness with merge queries..
 
 **Scaling**: Cloud Run concurrency can be tuned; for many files the GitHub Action could call Cloud Run per-file in parallel (watch cost).
 
@@ -401,7 +361,7 @@ GROUP BY league, season, team;
 
 ## 14. Acceptance criteria checklist
 - [ ] Automated ingestion from GitHub to GCS (GH Action created)
-- [ ] ETL job (Cloud Run) that normalizes JSON and writes to BigQuery
+- [ ] ETL job (Dataflow) that normalizes JSON and writes to BigQuery
 - [ ] BigQuery `matches_normalized` table partitioned and clustered
 - [ ] `season_results` table with champion label
 - [ ] Reproducible model (BigQuery ML) training step + evaluation
@@ -410,7 +370,7 @@ GROUP BY league, season, team;
 
 
 ## 15. Next steps & rollout
-1. Create GCP project and enable APIs: Cloud Storage, BigQuery, Cloud Run, Cloud Build, Cloud Logging.
+1. Create GCP project and enable APIs: Cloud Storage, BigQuery, Dataflow, Cloud Build, Cloud Logging.
 2. Provision a service account with minimal permissions and add its key to GitHub Secrets (or use Workload Identity Federation).
 3. Add GitHub Action `ingest.yml` and push a sample `data/` JSON file.
 4. Deploy Cloud Run ETL and trigger a run from the GitHub Action or Cloud Scheduler.
@@ -425,8 +385,4 @@ GROUP BY league, season, team;
 - Missing HT or FT: prefer FT for final outcome; HT only for mid-match features.
 - If dataset grows: consider Dataflow/Apache Beam for large-scale transforms.
 
-
----
-
-*Document created by ChatGPT — ask to iterate on any section, add more code snippets, or convert any SQL sketch into runnable SQL.*
 
