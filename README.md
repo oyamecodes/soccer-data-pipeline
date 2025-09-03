@@ -109,7 +109,7 @@ Clustering: `CLUSTER BY league, team_home, team_away` to reduce scan costs when 
 **Idempotence**: Overwrite using content-hash file name or commit-sha in path.
 
 
-## 6. Processing — Cloud Run ETL
+## 6. Processing — Dataflow ETL
 **Why Dataflow?** Fully managed, scalable batch/stream processing with Apache Beam. Handles large JSON inputs, schema enforcement, and parallel transformations. Free tier covers a small number of worker hours/month, but you can limit jobs and set budget alerts.
 
 **ETL flow per run**:
@@ -373,7 +373,7 @@ GROUP BY league, season, team;
 1. Create GCP project and enable APIs: Cloud Storage, BigQuery, Dataflow, Cloud Build, Cloud Logging.
 2. Provision a service account with minimal permissions and add its key to GitHub Secrets (or use Workload Identity Federation).
 3. Add GitHub Action `ingest.yml` and push a sample `data/` JSON file.
-4. Deploy Cloud Run ETL and trigger a run from the GitHub Action or Cloud Scheduler.
+4. Deploy Dataflow ETL and trigger a run from the GitHub Action or Cloud Scheduler.
 5. Run BigQuery aggregation SQL to populate `season_results` and verify champion labels.
 6. Create a BQ ML model (train) and run `ML.EVALUATE` on holdout seasons.
 
