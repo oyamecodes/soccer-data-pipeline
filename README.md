@@ -113,12 +113,10 @@ Cluster: `league, team_home, team_away`.
 
 **Idempotency**: Include `source_commit` + `file_path` metadata. Dedup in BigQuery.  
 
-<<<<<<< HEAD
 **Scaling**: Dataflow autoscaling; cap workers to limit cost.  
 =======
 ## 6. Processing — Dataflow ETL
 **Why Dataflow?** Fully managed, scalable batch/stream processing with Apache Beam. Handles large JSON inputs, schema enforcement, and parallel transformations. Free tier covers a small number of worker hours/month, but you can limit jobs and set budget alerts.
->>>>>>> 7d4cda807d6d2e2d8a5ed8510d658aaad99c0b24
 
 ---
 
@@ -250,8 +248,6 @@ if __name__ == "__main__":
     run()
 ```
 
-<<<<<<< HEAD
-=======
 ### 13.4 BigQuery: example aggregation to `season_results`
 ```sql
 CREATE OR REPLACE TABLE `project.soccer_data.season_results` AS
@@ -271,6 +267,7 @@ GROUP BY league, season, team;
 
 (Notes: the above SQL is a sketch — implement per-team conditional aggregation correctly.)
 
+---
 
 ## 14. Acceptance criteria checklist
 - [ ] Automated ingestion from GitHub to GCS (GH Action created)
@@ -281,6 +278,7 @@ GROUP BY league, season, team;
 - [ ] CI workflow to run ETL unit tests and retrain model
 - [ ] Monitoring (Cloud Logging) and Budget Alerts
 
+---
 
 ## 15. Next steps & rollout
 1. Create GCP project and enable APIs: Cloud Storage, BigQuery, Dataflow, Cloud Build, Cloud Logging.
@@ -290,7 +288,6 @@ GROUP BY league, season, team;
 5. Run BigQuery aggregation SQL to populate `season_results` and verify champion labels.
 6. Create a BQ ML model (train) and run `ML.EVALUATE` on holdout seasons.
 
->>>>>>> 7d4cda807d6d2e2d8a5ed8510d658aaad99c0b24
 ---
 
 ## 14. Acceptance criteria checklist
