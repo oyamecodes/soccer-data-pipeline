@@ -113,7 +113,12 @@ Cluster: `league, team_home, team_away`.
 
 **Idempotency**: Include `source_commit` + `file_path` metadata. Dedup in BigQuery.  
 
+<<<<<<< HEAD
 **Scaling**: Dataflow autoscaling; cap workers to limit cost.  
+=======
+## 6. Processing — Dataflow ETL
+**Why Dataflow?** Fully managed, scalable batch/stream processing with Apache Beam. Handles large JSON inputs, schema enforcement, and parallel transformations. Free tier covers a small number of worker hours/month, but you can limit jobs and set budget alerts.
+>>>>>>> 7d4cda807d6d2e2d8a5ed8510d658aaad99c0b24
 
 ---
 
@@ -245,6 +250,47 @@ if __name__ == "__main__":
     run()
 ```
 
+<<<<<<< HEAD
+=======
+### 13.4 BigQuery: example aggregation to `season_results`
+```sql
+CREATE OR REPLACE TABLE `project.soccer_data.season_results` AS
+SELECT
+  league,
+  season,
+  team,
+  SUM(points) as points,
+  SUM(CASE WHEN winner = 'home' AND team = team_home THEN 1 WHEN winner = 'away' AND team = team_away THEN 1 ELSE 0 END) as wins,
+  SUM(CASE WHEN winner = 'draw' THEN 1 ELSE 0 END) as draws,
+  SUM(CASE WHEN (winner = 'home' AND team <> team_home) OR (winner = 'away' AND team <> team_away) THEN 1 ELSE 0 END) as losses,
+  SUM(ft_home) as goals_for, -- careful: this needs conditional aggregation per team
+  -- ... more aggregations ...
+FROM `project.soccer_data.matches_normalized`
+GROUP BY league, season, team;
+```
+
+(Notes: the above SQL is a sketch — implement per-team conditional aggregation correctly.)
+
+
+## 14. Acceptance criteria checklist
+- [ ] Automated ingestion from GitHub to GCS (GH Action created)
+- [ ] ETL job (Dataflow) that normalizes JSON and writes to BigQuery
+- [ ] BigQuery `matches_normalized` table partitioned and clustered
+- [ ] `season_results` table with champion label
+- [ ] Reproducible model (BigQuery ML) training step + evaluation
+- [ ] CI workflow to run ETL unit tests and retrain model
+- [ ] Monitoring (Cloud Logging) and Budget Alerts
+
+
+## 15. Next steps & rollout
+1. Create GCP project and enable APIs: Cloud Storage, BigQuery, Dataflow, Cloud Build, Cloud Logging.
+2. Provision a service account with minimal permissions and add its key to GitHub Secrets (or use Workload Identity Federation).
+3. Add GitHub Action `ingest.yml` and push a sample `data/` JSON file.
+4. Deploy Dataflow ETL and trigger a run from the GitHub Action or Cloud Scheduler.
+5. Run BigQuery aggregation SQL to populate `season_results` and verify champion labels.
+6. Create a BQ ML model (train) and run `ML.EVALUATE` on holdout seasons.
+
+>>>>>>> 7d4cda807d6d2e2d8a5ed8510d658aaad99c0b24
 ---
 
 ## 14. Acceptance criteria checklist
