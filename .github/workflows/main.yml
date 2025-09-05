@@ -1,0 +1,153 @@
+name: Sync OpenFootball JSON to GCS
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'   # Every Sunday at 03:00 UTC
+  workflow_dispatch:       # Allow manual run
+
+env:
+  GCS_BUCKET: soccer-ingest-raw
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      # Authenticate to GCP using a service account key stored in GitHub Secrets
+      - name: Google Cloud auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      # Set up gcloud (includes gsutil)
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT }}
+          install_components: 'gsutil'
+
+      - name: Install jq (JSON parser)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Clone openfootball repo
+        run: |
+          git clone --depth 1 https://github.com/openfootball/football.json.git data-source
+
+      - name: Prepare league mapping
+        run: |
+          cat > leagues.json <<'JSON'
+          {
+            // Europe
+            "en": "English Premier League",
+            "sc": "Scottish Premiership",
+            "de": "German Bundesliga",
+            "es": "Spanish La Liga",
+            "it": "Italian Serie A",
+            "fr": "French Ligue 1",
+            "nl": "Dutch Eredivisie",
+            "be": "Belgian First Division A",
+            "pt": "Portuguese Primeira Liga",
+            "gr": "Greek Super League",
+            "tr": "Turkish Süper Lig",
+            "ua": "Ukrainian Premier League",
+            "ch": "Swiss Super League",
+            "at": "Austrian Bundesliga",
+            "dk": "Danish Superliga",
+            "fi": "Finnish Veikkausliiga",
+            "se": "Swedish Allsvenskan",
+            "no": "Norwegian Eliteserien",
+            "pl": "Polish Ekstraklasa",
+            "cz": "Czech First League",
+            "hu": "Hungarian Nemzeti Bajnokság I",
+            "ro": "Romanian Liga I",
+            "ru": "Russian Premier League",
+          
+            // South America
+            "ar": "Argentine Primera División",
+            "br": "Brazilian Série A",
+            "cl": "Chilean Primera División",
+            "co": "Colombian Categoría Primera A",
+            "uy": "Uruguayan Primera División",
+            "pe": "Peruvian Primera División",
+          
+            // North & Central America / Caribbean
+            "mx": "Mexican Liga MX",
+            "us": "MLS (United States & Canada)",
+            "cr": "Costa Rican Primera División",
+            "pa": "Panamanian Liga Panameña",
+          
+            // Africa
+            "eg": "Egyptian Premier League",
+            "za": "South African Premier Division",
+            "psl": "Premier Soccer League (South Africa)",  // alternative prefix
+            "ng": "Nigerian Professional Football League",
+            "ma": "Moroccan Botola",
+            "tn": "Tunisian Ligue Professionnelle 1",
+            "dz": "Algerian Ligue Professionnelle 1",
+          
+            // Asia
+            "jp": "J. League (Japan)",
+            "cn": "Chinese Super League",
+            "kr": "K League 1 (South Korea)",
+            "au": "A-League (Australia)",
+            "in": "Indian Super League",
+            "sa": "Saudi Professional League",
+          
+            // International Tournaments
+            "ucl": "UEFA Champions League",
+            "uel": "UEFA Europa League",
+            "wc": "FIFA World Cup"
+          }
+          JSON
+
+      - name: Reorganize into year/League Name structure
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p upload
+
+          # Iterate season folders (e.g., 2019-20/, 2020-21/)
+          for season in data-source/*/ ; do
+            season_name=$(basename "$season")
+            # Prefer first 4-digit year if present; else keep season name
+            if [[ "$season_name" =~ ^([0-9]{4}) ]]; then
+              year="${BASH_REMATCH[1]}"
+            else
+              year="$season_name"
+            fi
+
+          # Find JSON files at the top of each season folder
+          for file in $(find "$season" -maxdepth 1 -type f -name '*.json' | sort); do
+            filename=$(basename "$file")
+            prefix=$(printf '%s' "$filename" | grep -oE '^[a-z]+')
+            [[ -z "$prefix" ]] && continue
+          
+            # Keep only the highest version number per prefix
+            latest_file=$(ls "$season"/$prefix*.json 2>/dev/null | sort -V | tail -n 1)
+            if [[ "$file" != "$latest_file" ]]; then
+              continue
+            fi
+          
+            # Map code -> league name
+            league=$(jq -r --arg code "$prefix" '.[$code] // empty' leagues.json)
+            [[ -z "$league" ]] && { echo "Skipping $filename (unknown league code '$prefix')"; continue; }
+          
+            dest_dir="upload/$year/$league"
+            mkdir -p "$dest_dir"
+            cp "$file" "$dest_dir/$filename"
+            echo "Staged latest: $file -> $dest_dir/$filename"
+          done
+
+      - name: Upload to GCS (rsync)
+        run: |
+          if [ -d "upload" ] && [ "$(find upload -type f | wc -l)" -gt 0 ]; then
+            gsutil -m rsync -r "upload" "gs://${GCS_BUCKET}/"
+          else
+            echo "Nothing to upload."
+          fi
