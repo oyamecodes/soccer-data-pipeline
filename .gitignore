@@ -1,0 +1,165 @@
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+.classpath
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.virtualenv
+.conda
+.pyenv
+
+# Data files (exclude actual data from version control)
+data/
+data-source/
+upload/
+*.json
+!config/*.json
+!**/schema.json
+!**/example.json
+
+# Google Cloud and authentication
+*.key
+*.p12
+service-account*.json
+gcp-key*.json
+.google-credentials
+application_default_credentials.json
+
+# Secrets and environment variables
+.env
+.env.local
+.env.*.local
+secrets.yaml
+secrets.yml
+.secrets/
+
+# Terraform (if using infrastructure as code)
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+*.auto.tfvars
+
+# Logs
+*.log
+logs/
+log/
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+.temp/
+
+# Build artifacts and compiled code
+*.class
+*.jar
+*.war
+*.ear
+target/
+bin/
+
+# Node.js (if using any JS tools)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# BigQuery and SQL artifacts
+*.bqsession
+query_results/
+exports/
+
+# Apache Beam and Dataflow
+.beam/
+staging/
+temp/
+
+# Testing
+.pytest_cache/
+test-results/
+test-output/
+
+# Documentation build
+docs/_build/
+site/
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# Local configuration overrides
+local_config.yaml
+local_config.yml
+dev_config.yaml
+dev_config.yml
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Archives
+*.zip
+*.tar.gz
+*.rar
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Cache directories
+.cache/
+cache/
