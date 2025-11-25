@@ -1,121 +1,164 @@
-name: Sync OpenFootball JSON to GCS
+name: Sync OpenFootball JSON → GCS
 
 on:
   schedule:
-    - cron: '0 3 * * 0'   # Every Sunday at 03:00 UTC
-  workflow_dispatch:        # Allow manual run
+    - cron: '0 3 * * 0'   # Sundays at 03:00 UTC
+  workflow_dispatch:
 
 permissions:
-  contents: 'read'
-  id-token: 'write'
+  contents: read
+  id-token: write
 
 env:
   GCS_BUCKET: soccer-ingest-raw
+  OPENFOOTBALL_REPO: https://github.com/openfootball/football.json.git
+  LEAGUE_CONFIG: config/leagues.json
 
 jobs:
   sync:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout this repo
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Authenticate using Workload Identity Federation (Keyless)
-      - name: Google Cloud auth
+      # Authenticate to Google Cloud via Workload Identity / Service Account
+      - name: Google Cloud Auth
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: 'projects/1059253722982/locations/global/workloadIdentityPools/github-wif/providers/github-provider'
           service_account: 'github-ci@soccer-pipeline.iam.gserviceaccount.com'
 
-      # Set up gcloud (includes gsutil)
-      - name: Set up gcloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+      # Install gcloud / gsutil
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v3
         with:
-          project_id: 'soccer-pipeline' 
+          project_id: 'soccer-pipeline'
           install_components: 'gsutil'
 
-      - name: Install jq (JSON parser)
+      # Install jq for JSON parsing  
+      - name: Install jq
         run: |
           sudo apt-get update
           sudo apt-get install -y jq
 
-      - name: Clone openfootball repo
+      # Clone the OpenFootball data repo
+      - name: Clone OpenFootball JSON
         run: |
-          git clone --depth 1 https://github.com/openfootball/football.json.git data-source
+          git clone --depth 1 "$OPENFOOTBALL_REPO" data-source
 
-      - name: Reorganize into year/League Name structure
+      # Generate leagues.json dynamically
+      - name: Generate league codes → names mapping
+        shell: bash
+        run: |
+          mkdir -p "$(dirname "$LEAGUE_CONFIG")"
+          declare -A league_map
+
+          # Find all JSON files in data-source
+          while IFS= read -r -d '' file; do
+            filename=$(basename "$file")
+            prefix=$(echo "$filename" | grep -oE '^[a-zA-Z]+')
+            [[ -z "$prefix" ]] && continue
+
+            # Only first time per prefix
+            if [[ -n "${league_map[$prefix]+_}" ]]; then
+              continue
+            fi
+
+            league_name=$(jq -r '.name // empty' "$file")
+            if [[ -z "$league_name" ]]; then
+              league_name="$prefix"
+            fi
+
+            league_map[$prefix]="$league_name"
+          done < <(find data-source -type f -name '*.json' -print0)
+
+          # Write JSON
+          {
+            echo "{"
+            first=true
+            for prefix in "${!league_map[@]}"; do
+              name=${league_map[$prefix]}
+              esc_name=$(printf '%s' "$name" | sed 's/"/\\"/g')
+              if $first; then
+                first=false
+              else
+                echo ","
+              fi
+              printf '  "%s": "%s"' "$prefix" "$esc_name"
+            done
+            echo
+            echo "}"
+          } > "$LEAGUE_CONFIG"
+
+          echo "Generated league config:"
+          cat "$LEAGUE_CONFIG"
+
+      # Reorganize JSON files into league/year folder structure
+      - name: Reorganize and validate JSON
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
           mkdir -p upload
 
-          echo "Starting reorganization..."
+          for season in data-source/*/ ; do
+            season_name=$(basename "$season")
 
-          # Iterate through every JSON file in the data-source folder recursively
-          # We use a while loop with find to handle paths safely
-          find data-source -type f -name "*.json" | while read -r file; do
-                  
-          # 1. Extract the Directory name (Season)
-          dir_path=$(dirname "$file")
-          season_name=$(basename "$dir_path")
+            if [[ "$season_name" =~ ^([0-9]{4}) ]]; then
+              year="${BASH_REMATCH[1]}"
+            else
+              year="$season_name"
+            fi
 
-                  # Skip the root folder or metadata files
-                  if [[ "$season_name" == "data-source" ]] || [[ "$season_name" == "user" ]]; then
-                    continue
-                  fi
+            for file in "$season"/*.json; do
+              filename=$(basename "$file")
+              prefix=$(echo "$filename" | grep -oE '^[a-zA-Z]+')
+              [[ -z "$prefix" ]] && continue
 
-                  # 2. Extract Year
-                  # If the folder is "2020-21", grab "2020". If it's just "2020", grab "2020".
-                  if [[ "$season_name" =~ ^([0-9]{4}) ]]; then
-                    year="${BASH_REMATCH[1]}"
-                  else
-                    # Skip folders that don't look like years (e.g., .git)
-                    continue
-                  fi
+              # Validate non-empty
+              if [[ ! -s "$file" ]]; then
+                echo "ERROR: Empty file: $file"
+                continue
+              fi
 
-                  # 3. Extract Filename and determine League
-                  filename=$(basename "$file")
-                  
-                  # Try to match the filename to a league code (e.g. 'eng.1.json' -> 'eng')
-                  # We look for the first sequence of letters
-                  prefix=$(echo "$filename" | grep -oE '^[a-z]+')
+              # Validate JSON syntax
+              if ! jq empty "$file" 2>/dev/null; then
+                echo "ERROR: Invalid JSON: $file"
+                continue
+              fi
 
-                  # If no prefix found, skip
-                  if [[ -z "$prefix" ]]; then
-                      echo "  Skipping $filename (no prefix found)"
-                      continue
-                  fi
+              # Validate expected fields
+              if ! jq -e '.name and .rounds' "$file" >/dev/null; then
+                echo "WARNING: Missing .name or .rounds in $file"
+              fi
 
-                  # 4. Check against leagues.json
-                  # We look up the prefix in the config/leagues.json file
-                  # If the config file doesn't exist, we can't map it.
-                  if [[ ! -f "config/leagues.json" ]]; then
-                      echo "  ERROR: config/leagues.json not found in repo!"
-                      exit 1
-                  fi
+              # Pick the latest version of the prefix
+              latest=$(ls "$season"/${prefix}*.json | sort -V | tail -n1)
+              if [[ "$file" != "$latest" ]]; then
+                echo "Skipping older version: $filename"
+                continue
+              fi
 
-                  league_name=$(jq -r --arg code "$prefix" '.[$code] // empty' config/leagues.json)
+              # Lookup league name from mapping
+              league=$(jq -r --arg code "$prefix" '.[$code] // empty' "$LEAGUE_CONFIG")
+              if [[ -z "$league" ]]; then
+                echo "Skipping unknown prefix: $prefix"
+                continue
+              fi
 
-                  if [[ -n "$league_name" ]]; then
-                      dest_dir="upload/$year/$league_name"
-                      mkdir -p "$dest_dir"
-                      cp "$file" "$dest_dir/$filename"
-                      echo "  Processed: $year / $league_name / $filename"
-                  else
-                      # Optional: Uncomment to see what is being skipped
-                      # echo "  Skipped: $filename (Code '$prefix' not in leagues.json)"
-                      true 
-                  fi
-                done
+              dest="upload/$league/$year"
+              mkdir -p "$dest"
+              cp "$file" "$dest/$filename"
+              echo "Staged $filename → $dest/"
+            done
+          done
 
-                echo "Reorganization complete. Checking upload folder..."
-                ls -R upload
-
-      - name: Upload to GCS (rsync)
+      # Upload reorganized JSON files to GCS
+      - name: Upload to GCS
         run: |
-          if [ -d "upload" ] && [ "$(find upload -type f | wc -l)" -gt 0 ]; then
-            gsutil -m rsync -r "upload" "gs://${GCS_BUCKET}/"
+          if [ -d upload ] && [ "$(find upload -type f | wc -l)" -gt 0 ]; then
+            gsutil -m rsync -r upload "gs://${GCS_BUCKET}/"
           else
             echo "Nothing to upload."
           fi
