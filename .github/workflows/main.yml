@@ -3,7 +3,11 @@ name: Sync OpenFootball JSON to GCS
 on:
   schedule:
     - cron: '0 3 * * 0'   # Every Sunday at 03:00 UTC
-  workflow_dispatch:       # Allow manual run
+  workflow_dispatch:        # Allow manual run
+
+permissions:
+  contents: 'read'
+  id-token: 'write'
 
 env:
   GCS_BUCKET: soccer-ingest-raw
@@ -16,17 +20,18 @@ jobs:
       - name: Checkout this repo
         uses: actions/checkout@v4
 
-      # Authenticate to GCP using a service account key stored in GitHub Secrets
+      # Authenticate using Workload Identity Federation (Keyless)
       - name: Google Cloud auth
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: 'projects/1059253722982/locations/global/workloadIdentityPools/github-wif/providers/github-provider'
+          service_account: 'github-ci@soccer-pipeline.iam.gserviceaccount.com'
 
       # Set up gcloud (includes gsutil)
       - name: Set up gcloud SDK
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ secrets.GCP_PROJECT }}
+          project_id: 'soccer-pipeline' 
           install_components: 'gsutil'
 
       - name: Install jq (JSON parser)
@@ -60,17 +65,17 @@ jobs:
             filename=$(basename "$file")
             prefix=$(printf '%s' "$filename" | grep -oE '^[a-z]+')
             [[ -z "$prefix" ]] && continue
-          
+           
             # Keep only the highest version number per prefix
             latest_file=$(ls "$season"/$prefix*.json 2>/dev/null | sort -V | tail -n 1)
             if [[ "$file" != "$latest_file" ]]; then
               continue
             fi
-          
+           
             # Map code -> league name using config/leagues.json
             league=$(jq -r --arg code "$prefix" '.[$code] // empty' config/leagues.json)
             [[ -z "$league" ]] && { echo "Skipping $filename (unknown league code '$prefix')"; continue; }
-          
+           
             dest_dir="upload/$year/$league"
             mkdir -p "$dest_dir"
             cp "$file" "$dest_dir/$filename"
