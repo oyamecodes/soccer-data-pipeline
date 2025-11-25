@@ -50,38 +50,67 @@ jobs:
           shopt -s nullglob
           mkdir -p upload
 
-          # Iterate season folders (e.g., 2019-20/, 2020-21/)
-          for season in data-source/*/ ; do
-            season_name=$(basename "$season")
-            # Prefer first 4-digit year if present; else keep season name
-            if [[ "$season_name" =~ ^([0-9]{4}) ]]; then
-              year="${BASH_REMATCH[1]}"
-            else
-              year="$season_name"
-            fi
+          echo "Starting reorganization..."
 
-          # Find JSON files at the top of each season folder
-          for file in $(find "$season" -maxdepth 1 -type f -name '*.json' | sort); do
-            filename=$(basename "$file")
-            prefix=$(printf '%s' "$filename" | grep -oE '^[a-z]+')
-            [[ -z "$prefix" ]] && continue
-           
-            # Keep only the highest version number per prefix
-            latest_file=$(ls "$season"/$prefix*.json 2>/dev/null | sort -V | tail -n 1)
-            if [[ "$file" != "$latest_file" ]]; then
-              continue
-            fi
-           
-            # Map code -> league name using config/leagues.json
-            league=$(jq -r --arg code "$prefix" '.[$code] // empty' config/leagues.json)
-            [[ -z "$league" ]] && { echo "Skipping $filename (unknown league code '$prefix')"; continue; }
-           
-            dest_dir="upload/$year/$league"
-            mkdir -p "$dest_dir"
-            cp "$file" "$dest_dir/$filename"
-            echo "Staged latest: $file -> $dest_dir/$filename"
-          done
-          done
+          # Iterate through every JSON file in the data-source folder recursively
+          # We use a while loop with find to handle paths safely
+          find data-source -type f -name "*.json" | while read -r file; do
+                  
+          # 1. Extract the Directory name (Season)
+          dir_path=$(dirname "$file")
+          season_name=$(basename "$dir_path")
+
+                  # Skip the root folder or metadata files
+                  if [[ "$season_name" == "data-source" ]] || [[ "$season_name" == "user" ]]; then
+                    continue
+                  fi
+
+                  # 2. Extract Year
+                  # If the folder is "2020-21", grab "2020". If it's just "2020", grab "2020".
+                  if [[ "$season_name" =~ ^([0-9]{4}) ]]; then
+                    year="${BASH_REMATCH[1]}"
+                  else
+                    # Skip folders that don't look like years (e.g., .git)
+                    continue
+                  fi
+
+                  # 3. Extract Filename and determine League
+                  filename=$(basename "$file")
+                  
+                  # Try to match the filename to a league code (e.g. 'eng.1.json' -> 'eng')
+                  # We look for the first sequence of letters
+                  prefix=$(echo "$filename" | grep -oE '^[a-z]+')
+
+                  # If no prefix found, skip
+                  if [[ -z "$prefix" ]]; then
+                      echo "  Skipping $filename (no prefix found)"
+                      continue
+                  fi
+
+                  # 4. Check against leagues.json
+                  # We look up the prefix in the config/leagues.json file
+                  # If the config file doesn't exist, we can't map it.
+                  if [[ ! -f "config/leagues.json" ]]; then
+                      echo "  ERROR: config/leagues.json not found in repo!"
+                      exit 1
+                  fi
+
+                  league_name=$(jq -r --arg code "$prefix" '.[$code] // empty' config/leagues.json)
+
+                  if [[ -n "$league_name" ]]; then
+                      dest_dir="upload/$year/$league_name"
+                      mkdir -p "$dest_dir"
+                      cp "$file" "$dest_dir/$filename"
+                      echo "  Processed: $year / $league_name / $filename"
+                  else
+                      # Optional: Uncomment to see what is being skipped
+                      # echo "  Skipped: $filename (Code '$prefix' not in leagues.json)"
+                      true 
+                  fi
+                done
+
+                echo "Reorganization complete. Checking upload folder..."
+                ls -R upload
 
       - name: Upload to GCS (rsync)
         run: |
